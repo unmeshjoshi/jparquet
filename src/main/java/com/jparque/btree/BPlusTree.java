@@ -9,6 +9,7 @@ import com.jparque.storage.StorageEngine;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.BufferUnderflowException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.*;
 
@@ -881,52 +882,112 @@ public class BPlusTree implements StorageEngine {
         int totalSize = 0;
         long pageId = startPageId;
         
-        while (pageId != 0 && !visitedPages.contains(pageId)) {
-            visitedPages.add(pageId);
-            
-            // Safety check
-            if (visitedPages.size() > 1000) {
-                throw new IOException("Overflow chain too large");
+        try {
+            while (pageId != 0 && !visitedPages.contains(pageId)) {
+                visitedPages.add(pageId);
+                
+                // Safety check for overflow chain size
+                if (visitedPages.size() > 2000) { // Increased limit to handle larger values
+                    System.err.println("Warning: Extremely large overflow chain detected: " + visitedPages.size() + " pages");
+                    throw new IOException("Overflow chain too large");
+                }
+                
+                Page page = pageManager.readPage(pageId);
+                if (page == null) {
+                    throw new IOException("Failed to read overflow page: " + pageId);
+                }
+                
+                // Validate this is an overflow page
+                if (page.isLeaf() || page.isBranch()) {
+                    throw new IOException("Invalid page type in overflow chain: expected overflow, got " + 
+                                        (page.isLeaf() ? "leaf" : "branch"));
+                }
+                
+                int count = page.count();
+                // Validate count is reasonable
+                if (count < 0 || count > pageManager.getPageSize() - Page.PAGE_HEADER_SIZE) {
+                    throw new IOException("Invalid data size in overflow page: " + count);
+                }
+                
+                totalSize += count; // We stored the data length in count
+                pageId = page.overflow();
             }
-            
-            Page page = pageManager.readPage(pageId);
-            
-            // Validate this is an overflow page
-            if (page.isLeaf() || page.isBranch()) {
-                throw new IOException("Invalid page type in overflow chain");
-            }
-            
-            totalSize += page.count(); // We stored the data length in count
-            pageId = page.overflow();
+        } catch (IOException e) {
+            System.err.println("Error calculating overflow data size: " + e.getMessage());
+            throw e;
         }
         
+        // Check for cycle in the chain
         if (visitedPages.contains(pageId) && pageId != 0) {
             throw new IOException("Cycle detected in overflow chain");
         }
         
-        // Allocate a buffer for the entire value
-        byte[] result = new byte[totalSize];
-        int offset = 0;
-        pageId = startPageId;
-        visitedPages.clear(); // Reset for second pass
-        
-        // Read data from each overflow page
-        while (pageId != 0 && !visitedPages.contains(pageId)) {
-            visitedPages.add(pageId);
-            Page page = pageManager.readPage(pageId);
-            int length = page.count();
-            
-            // Copy data from this page
-            ByteBuffer buffer = ByteBuffer.wrap(page.data());
-            buffer.position(Page.PAGE_HEADER_SIZE);
-            buffer.get(result, offset, length);
-            
-            // Move to next page
-            offset += length;
-            pageId = page.overflow();
+        // Cap the total size for safety
+        if (totalSize > 50 * 1024 * 1024) { // 50MB cap
+            System.err.println("Warning: Extremely large value detected: " + totalSize + " bytes");
+            throw new IOException("Value size exceeds safety limit: " + totalSize + " bytes");
         }
         
-        return result;
+        // Allocate a buffer for the entire value
+        byte[] result;
+        try {
+            result = new byte[totalSize];
+        } catch (OutOfMemoryError e) {
+            System.err.println("Failed to allocate buffer for large value: " + totalSize + " bytes");
+            throw new IOException("Cannot allocate buffer for large value: " + e.getMessage(), e);
+        }
+        
+        // Reset for second pass
+        int offset = 0;
+        pageId = startPageId;
+        visitedPages.clear();
+        
+        try {
+            // Read data from each overflow page
+            while (pageId != 0 && !visitedPages.contains(pageId)) {
+                visitedPages.add(pageId);
+                
+                Page page = pageManager.readPage(pageId);
+                if (page == null) {
+                    throw new IOException("Failed to read overflow page: " + pageId);
+                }
+                
+                int length = page.count();
+                
+                // Validate count again
+                if (length < 0 || length > page.data().length - Page.PAGE_HEADER_SIZE) {
+                    throw new IOException("Invalid data length in overflow page: " + length);
+                }
+                
+                // Validate offset is within bounds
+                if (offset + length > result.length) {
+                    throw new IOException("Buffer overflow while reading overflow pages: offset=" + 
+                                         offset + ", length=" + length + ", buffer size=" + result.length);
+                }
+                
+                // Copy data from this page
+                try {
+                    ByteBuffer buffer = ByteBuffer.wrap(page.data());
+                    buffer.position(Page.PAGE_HEADER_SIZE);
+                    buffer.get(result, offset, length);
+                } catch (Exception e) {
+                    throw new IOException("Error reading data from overflow page: " + e.getMessage(), e);
+                }
+                
+                // Move to next page
+                offset += length;
+                pageId = page.overflow();
+            }
+            
+            if (offset != totalSize) {
+                System.err.println("Warning: Read size " + offset + " does not match expected size " + totalSize);
+            }
+            
+            return result;
+        } catch (IOException e) {
+            System.err.println("Error reading from overflow pages: " + e.getMessage());
+            throw e;
+        }
     }
     
     @Override
@@ -1199,7 +1260,7 @@ public class BPlusTree implements StorageEngine {
                     Object val = entry.getValue();
                     
                     size += 4; // Key length (4 bytes)
-                    size += key.getBytes().length; // Key bytes
+                    size += key.getBytes(StandardCharsets.UTF_8).length; // Key bytes
                     size += 1; // Type (1 byte)
                     
                     // Value size depends on type
@@ -1207,7 +1268,7 @@ public class BPlusTree implements StorageEngine {
                         // No additional bytes for null
                     } else if (val instanceof String) {
                         size += 4; // String length (4 bytes)
-                        size += ((String) val).getBytes().length; // String bytes
+                        size += ((String) val).getBytes(StandardCharsets.UTF_8).length; // String bytes
                     } else if (val instanceof Integer) {
                         size += 4; // Integer (4 bytes)
                     } else if (val instanceof Long) {
@@ -1222,7 +1283,7 @@ public class BPlusTree implements StorageEngine {
                         // Unsupported type, convert to string
                         String strVal = val.toString();
                         size += 4; // String length (4 bytes)
-                        size += strVal.getBytes().length; // String bytes
+                        size += strVal.getBytes(StandardCharsets.UTF_8).length; // String bytes
                     }
                 }
                 
@@ -1246,7 +1307,7 @@ public class BPlusTree implements StorageEngine {
                     
                     String key = entry.getKey();
                     Object val = entry.getValue();
-                    byte[] keyBytes = key.getBytes();
+                    byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
                     
                     buffer.putInt(keyBytes.length);
                     buffer.put(keyBytes);
@@ -1255,7 +1316,7 @@ public class BPlusTree implements StorageEngine {
                         buffer.put((byte) 0); // Type 0: null
                     } else if (val instanceof String) {
                         buffer.put((byte) 6); // Type 6: String (match deserialize type code)
-                        byte[] strBytes = ((String) val).getBytes();
+                        byte[] strBytes = ((String) val).getBytes(StandardCharsets.UTF_8);
                         buffer.putInt(strBytes.length);
                         buffer.put(strBytes);
                     } else if (val instanceof Integer) {
@@ -1276,7 +1337,7 @@ public class BPlusTree implements StorageEngine {
                     } else {
                         // Unsupported type, convert to string
                         buffer.put((byte) 6); // Type 6: String (match deserialize type code)
-                        byte[] strBytes = val.toString().getBytes();
+                        byte[] strBytes = val.toString().getBytes(StandardCharsets.UTF_8);
                         buffer.putInt(strBytes.length);
                         buffer.put(strBytes);
                     }
@@ -1311,7 +1372,20 @@ public class BPlusTree implements StorageEngine {
                     return result; // Return empty map
                 }
                 
-                int count = buffer.getInt(); // Number of entries
+                // Check if buffer position is valid
+                if (buffer.position() < 0 || buffer.position() >= buffer.capacity()) {
+                    System.err.println("Warning: Invalid buffer position: " + buffer.position() + ", capacity: " + buffer.capacity());
+                    return result; // Return empty map
+                }
+                
+                // Try to read entry count, but with additional error handling
+                int count;
+                try {
+                    count = buffer.getInt(); // Number of entries
+                } catch (BufferUnderflowException e) {
+                    System.err.println("Warning: Buffer underflow reading entry count");
+                    return result; // Return empty map
+                }
                 
                 // Sanity check on entry count
                 if (count < 0 || count > 1000) { // Arbitrary limit
@@ -1320,31 +1394,64 @@ public class BPlusTree implements StorageEngine {
                 }
                 
                 for (int i = 0; i < count; i++) {
+                    // Verify we have at least 4 bytes for key length
                     if (buffer.remaining() < 4) {
-                        System.err.println("Warning: Buffer underflow while reading key length");
+                        System.err.println("Warning: Buffer underflow while reading key length at entry " + i);
                         break; // Break to return partial results
                     }
                     
-                    // Read key
-                    int keyLength = buffer.getInt();
+                    // Read key length with error handling
+                    int keyLength;
+                    try {
+                        keyLength = buffer.getInt();
+                    } catch (BufferUnderflowException e) {
+                        System.err.println("Warning: Error reading key length at entry " + i);
+                        break; // Break to return partial results
+                    }
                     
                     // Sanity check on key length
-                    if (keyLength < 0 || keyLength > buffer.remaining()) {
-                        System.err.println("Warning: Invalid key length: " + keyLength);
+                    if (keyLength < 0 || keyLength > buffer.remaining() || keyLength > 10000) { // More reasonable max length
+                        System.err.println("Warning: Invalid key length: " + keyLength + " at entry " + i);
                         break; // Break to return partial results
                     }
                     
+                    // Read key bytes with error handling
                     byte[] keyBytes = new byte[keyLength];
-                    buffer.get(keyBytes);
-                    String key = new String(keyBytes);
-                    
-                    if (buffer.remaining() < 1) {
-                        System.err.println("Warning: Buffer underflow while reading type");
+                    try {
+                        buffer.get(keyBytes);
+                    } catch (BufferUnderflowException e) {
+                        System.err.println("Warning: Error reading key bytes at entry " + i);
                         break; // Break to return partial results
                     }
                     
-                    // Read type
-                    byte type = buffer.get();
+                    // Create string from bytes with error handling
+                    String key;
+                    try {
+                        key = new String(keyBytes, StandardCharsets.UTF_8);
+                    } catch (Exception e) {
+                        System.err.println("Warning: Error creating string from key bytes at entry " + i);
+                        break; // Break to return partial results
+                    }
+                    
+                    // Verify we have at least 1 byte for type
+                    if (buffer.remaining() < 1) {
+                        System.err.println("Warning: Buffer underflow while reading type at entry " + i + " for key " + key);
+                        break; // Break to return partial results
+                    }
+                    
+                    // Read type with error handling
+                    byte type;
+                    try {
+                        type = buffer.get();
+                    } catch (BufferUnderflowException e) {
+                        System.err.println("Warning: Error reading type at entry " + i + " for key " + key);
+                        break; // Break to return partial results
+                    }
+                    
+                    // Validate type is within expected range
+                    if (type < 0 || type > 6) {
+                        System.err.println("Warning: Type code " + type + " out of expected range (0-6) for key " + key);
+                    }
                     
                     // Read value based on type
                     switch (type) {
@@ -1388,34 +1495,51 @@ public class BPlusTree implements StorageEngine {
                             break;
                         case 6: // String (Type 6)
                             if (buffer.remaining() < 4) {
-                                System.err.println("Warning: Buffer underflow while reading String length");
+                                System.err.println("Warning: Buffer underflow while reading String length for key " + key);
                                 break;
                             }
-                            int strLength = buffer.getInt();
                             
-                            if (strLength < 0 || strLength > buffer.remaining()) {
-                                System.err.println("Warning: Invalid String length: " + strLength);
+                            int strLength;
+                            try {
+                                strLength = buffer.getInt();
+                            } catch (BufferUnderflowException e) {
+                                System.err.println("Warning: Error reading String length for key " + key);
+                                break;
+                            }
+                            
+                            // More reasonable maximum string length limit
+                            if (strLength < 0 || strLength > buffer.remaining() || strLength > 1000000) {
+                                System.err.println("Warning: Invalid String length: " + strLength + " for key " + key);
                                 break;
                             }
                             
                             byte[] strBytes = new byte[strLength];
-                            buffer.get(strBytes);
-                            result.put(key, new String(strBytes));
+                            try {
+                                buffer.get(strBytes);
+                                result.put(key, new String(strBytes, StandardCharsets.UTF_8));
+                            } catch (Exception e) {
+                                System.err.println("Warning: Error reading or converting String value for key " + key + ": " + e.getMessage());
+                            }
                             break;
                         default:
-                            System.err.println("Warning: Unknown type: " + type + ", trying to interpret as string");
-                            // Try to interpret as string for backward compatibility
+                            System.err.println("Warning: Unknown type: " + type + " for key " + key + ", trying to interpret as string");
+                            // Try to interpret as string for backward compatibility, with better error handling
                             if (buffer.remaining() >= 4) {
                                 try {
                                     int unknownStrLength = buffer.getInt();
-                                    if (unknownStrLength >= 0 && unknownStrLength <= buffer.remaining()) {
+                                    // More reasonable string length limit
+                                    if (unknownStrLength >= 0 && unknownStrLength <= buffer.remaining() && unknownStrLength <= 1000000) {
                                         byte[] unknownStrBytes = new byte[unknownStrLength];
                                         buffer.get(unknownStrBytes);
-                                        result.put(key, new String(unknownStrBytes));
+                                        result.put(key, new String(unknownStrBytes, StandardCharsets.UTF_8));
+                                    } else {
+                                        System.err.println("Warning: Invalid string length for unknown type: " + unknownStrLength + " for key " + key);
                                     }
                                 } catch (Exception e) {
-                                    System.err.println("Failed to recover unknown type: " + e.getMessage());
+                                    System.err.println("Failed to recover unknown type for key " + key + ": " + e.getMessage());
                                 }
+                            } else {
+                                System.err.println("Warning: Not enough remaining bytes to recover unknown type for key " + key);
                             }
                     }
                 }

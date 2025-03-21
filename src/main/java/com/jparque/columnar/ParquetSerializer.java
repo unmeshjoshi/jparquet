@@ -2,7 +2,6 @@ package com.jparque.columnar;
 
 import com.jparque.common.schema.*;
 import com.jparque.columnar.chunk.CompressionCodec;
-import com.jparque.columnar.SerializerConfig;
 import com.jparque.common.compression.Compressor;
 import com.jparque.common.compression.CompressorFactory;
 
@@ -146,12 +145,13 @@ public class ParquetSerializer {
         // Write each field as a column chunk
         for (Field field : schema.getFields()) {
             // First collect all values for this field
-            ByteBuffer columnBuffer = ByteBuffer.allocate(1024 * 1024); // 1MB initial size
+            ByteBuffer columnBuffer = ByteBuffer.allocate(10 * 1024 * 1024); // 10MB initial size
             
             // Write each record's value for this field
             for (Map<String, Object> record : records) {
                 Object value = record.get(field.getName());
                 writeFieldValueToBuffer(columnBuffer, field, value);
+                // Note: we don't need to update columnBuffer here because writeFieldValueToBuffer modifies it in-place
             }
             
             // Prepare the column chunk for writing
@@ -185,6 +185,9 @@ public class ParquetSerializer {
     }
     
     private void writeFieldValueToBuffer(ByteBuffer buffer, Field field, Object value) {
+        // Check if buffer needs expansion
+        ByteBuffer updatedBuffer = ensureBufferCapacity(buffer, 128); // Ensure minimum space for most primitive values
+        
         // Handle null values for optional fields
         if (field.getRepetition() == Repetition.OPTIONAL) {
             buffer.put((byte) (value == null ? 1 : 0));
@@ -196,24 +199,53 @@ public class ParquetSerializer {
         // Handle repeated fields
         if (field.getRepetition() == Repetition.REPEATED) {
             List<?> values = value != null ? (List<?>) value : List.of();
-            buffer.putInt(values.size());
+            updatedBuffer = ensureBufferCapacity(updatedBuffer, 4); // For the length integer
+            updatedBuffer.putInt(values.size());
             for (Object item : values) {
-                writeSingleValueToBuffer(buffer, field, item);
+                writeSingleValueToBuffer(updatedBuffer, field, item);
             }
             return;
         }
         
-        writeSingleValueToBuffer(buffer, field, value);
+        writeSingleValueToBuffer(updatedBuffer, field, value);
+    }
+    
+    /**
+     * Ensures the buffer has at least the specified additional capacity.
+     * If not, creates a new larger buffer with the contents of the old one.
+     * 
+     * @param buffer The current buffer
+     * @param additionalCapacity The minimum additional capacity needed
+     * @return The buffer, which may be a new larger buffer if expansion was needed
+     */
+    private ByteBuffer ensureBufferCapacity(ByteBuffer buffer, int additionalCapacity) {
+        if (buffer.remaining() < additionalCapacity) {
+            // Double the capacity or increase by 1MB, whichever is larger
+            int newCapacity = Math.max(buffer.capacity() * 2, buffer.capacity() + (1024 * 1024));
+            
+            // Create new buffer and copy existing data
+            ByteBuffer newBuffer = ByteBuffer.allocate(newCapacity);
+            buffer.flip();
+            newBuffer.put(buffer);
+            
+            // Return the new buffer and update the reference
+            return newBuffer;
+        }
+        return buffer;
     }
     
     private void writeSingleValueToBuffer(ByteBuffer buffer, Field field, Object value) {
+        ByteBuffer updatedBuffer = buffer;
+        
         switch (field.getType()) {
             case INT32:
-                buffer.putInt((Integer) value);
+                updatedBuffer = ensureBufferCapacity(updatedBuffer, 4);
+                updatedBuffer.putInt((Integer) value);
                 break;
                 
             case INT64:
-                buffer.putLong((Long) value);
+                updatedBuffer = ensureBufferCapacity(updatedBuffer, 8);
+                updatedBuffer.putLong((Long) value);
                 break;
                 
             case BINARY:
@@ -224,8 +256,10 @@ public class ParquetSerializer {
                     bytes = (byte[]) value;
                 }
                 
-                buffer.putInt(bytes.length);
-                buffer.put(bytes);
+                // Need space for length (4 bytes) + actual bytes
+                updatedBuffer = ensureBufferCapacity(updatedBuffer, 4 + bytes.length);
+                updatedBuffer.putInt(bytes.length);
+                updatedBuffer.put(bytes);
                 break;
                 
             default:

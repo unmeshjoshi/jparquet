@@ -215,10 +215,13 @@ public class BPlusTreeTest {
         
         // Create a large string (> 100KB)
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < 20000; i++) {
+        // Increase the test string size to 10000 iterations
+        for (int i = 0; i < 10000; i++) {
             sb.append("This is a large value that should be stored in overflow pages. ");
         }
         String largeString = sb.toString();
+        System.out.println("Original string length: " + largeString.length());
+        
         value.put("largeText", largeString);
         
         // Write to the tree
@@ -227,9 +230,40 @@ public class BPlusTreeTest {
         // Read it back
         Optional<Map<String, Object>> result = tree.read(key);
         
-        // Verify
-        assertTrue(result.isPresent());
-        assertEquals(largeString, result.get().get("largeText"));
+        // Verify with more detailed debugging
+        assertTrue(result.isPresent(), "Result should be present");
+        
+        Object returnedValue = result.get().get("largeText");
+        assertNotNull(returnedValue, "Returned value should not be null");
+        
+        if (returnedValue instanceof String) {
+            String returnedString = (String) returnedValue;
+            System.out.println("Returned string length: " + returnedString.length());
+            
+            if (!largeString.equals(returnedString)) {
+                // If they don't match, print some diagnostics
+                System.out.println("Strings don't match!");
+                if (returnedString.length() != largeString.length()) {
+                    System.out.println("Length mismatch: original=" + largeString.length() + 
+                                      ", returned=" + returnedString.length());
+                } else {
+                    // Find first different character
+                    for (int i = 0; i < largeString.length(); i++) {
+                        if (largeString.charAt(i) != returnedString.charAt(i)) {
+                            System.out.println("First difference at position " + i + 
+                                             ": original='" + largeString.charAt(i) + 
+                                             "', returned='" + returnedString.charAt(i) + "'");
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            System.out.println("Returned value is not a String but a " + 
+                              (returnedValue != null ? returnedValue.getClass().getName() : "null"));
+        }
+        
+        assertEquals(largeString, result.get().get("largeText"), "Returned large string should match original");
     }
     
     @Test

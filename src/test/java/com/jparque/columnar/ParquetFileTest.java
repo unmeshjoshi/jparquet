@@ -1,14 +1,12 @@
 package com.jparque.columnar;
 
+import com.jparque.columnar.chunk.CompressionCodec;
 import com.jparque.columnar.file.ParquetFileReader;
 import com.jparque.columnar.file.ParquetFileWriter;
 import com.jparque.common.schema.MessageType;
 import com.jparque.common.schema.OriginalType;
 import com.jparque.common.schema.Repetition;
 import com.jparque.common.schema.Type;
-import com.jparque.common.schema.*;
-import com.jparque.columnar.chunk.CompressionCodec;
-import com.jparque.columnar.SerializerConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
