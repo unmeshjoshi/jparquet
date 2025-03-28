@@ -21,7 +21,7 @@ gradle-app.setting
 *.log
 
 # Package files
-*.jar
+#*.jar
 *.war
 *.nar
 *.ear
