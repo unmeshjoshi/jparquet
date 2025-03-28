@@ -209,274 +209,247 @@ public class Page {
      */
     public boolean putElement(byte[] key, byte[] value, boolean hasOverflow) {
         try {
-            // Validate inputs
-            if (key == null || key.length == 0) {
-                System.err.println("Warning: Attempting to insert null or empty key");
+            // Step 1: Validate inputs and check space
+            if (!validateInputs(key, value)) {
                 return false;
             }
             
+            // Ensure value is not null
             if (value == null) {
-                System.err.println("Warning: Null value in putElement, using empty array");
-                value = new byte[0]; // Use empty array instead of null
+                value = new byte[0];
             }
             
-            // Check if we have enough space for the element header
-            int requiredHeaderSpace = ELEM_SIZE;
-            if (requiredHeaderSpace > freeSpaceForHeaders()) {
-                System.err.println("Not enough space for element header: " + requiredHeaderSpace + 
-                                  " > " + freeSpaceForHeaders());
+            // Step 2: Find insertion position and try to update existing element
+            int insertPos = findInsertionPosition(key);
+            if (updateExistingElement(key, value, hasOverflow, insertPos)) {
+                return true;
+            }
+            
+            // Step 3: Calculate positions and check if there's enough space
+            DataPositions positions = calculateDataPositions(key, value, insertPos);
+            if (positions == null) {
                 return false;
             }
             
-            // Find insertion position using binary search
-            int insertPos = 0;
-            int count = count();
-            
-            if (count > 0) {
-                int low = 0;
-                int high = count - 1;
-                
-                while (low <= high) {
-                    int mid = (low + high) >>> 1;
-                    Element midElem = element(mid);
-                    if (midElem == null) {
-                        System.err.println("Null element at index: " + mid);
-                        break;
-                    }
-                    
-                    byte[] midKey = midElem.key();
-                    if (midKey == null || midKey.length == 0) {
-                        System.err.println("Null or empty key for element at index: " + mid);
-                        break;
-                    }
-                    
-                    int cmp = compareKeys(key, midKey);
-                    
-                    if (cmp < 0) {
-                        high = mid - 1;
-                    } else if (cmp > 0) {
-                        low = mid + 1;
-                    } else {
-                        // Key exists, update value
-                        insertPos = mid;
-                        break;
-                    }
-                }
-                
-                if (low > high) {
-                    insertPos = low;
-                }
-            }
-            
-            // If key exists, update value
-            if (insertPos < count) {
-                Element existing = element(insertPos);
-                if (existing != null) {
-                    byte[] existingKey = existing.key();
-                    if (existingKey != null && Arrays.equals(key, existingKey)) {
-                        existing.setValue(value);
-                        if (hasOverflow) {
-                            existing.setFlags(1); // Set overflow flag
-                        } else {
-                            existing.setFlags(0); // Clear overflow flag
-                        }
-                        return true;
-                    }
-                }
-            }
+            // Step 4: Create and store the new element
+            return insertNewElement(key, value, hasOverflow, insertPos, positions);
         } catch (Exception e) {
             System.err.println("Exception in putElement: " + e.getMessage());
             e.printStackTrace();
             return false;
         }
+    }
+    
+    /**
+     * Validates the key and value inputs for element insertion.
+     */
+    private boolean validateInputs(byte[] key, byte[] value) {
+        // Check for null or empty key
+        if (key == null || key.length == 0) {
+            System.err.println("Warning: Attempting to insert null or empty key");
+            return false;
+        }
         
-        try {
-            int count = count(); // Store count for use in the rest of the method
-            int insertPos = 0; // Default insertion position
-            
-            // Recalculate insertion position using binary search
-            if (count > 0) {
-                int low = 0;
-                int high = count - 1;
-                
-                while (low <= high) {
-                    int mid = (low + high) >>> 1;
-                    Element midElem = element(mid);
-                    if (midElem == null) {
-                        System.err.println("Null element at index: " + mid);
-                        break;
-                    }
-                    
-                    byte[] midKey = midElem.key();
-                    if (midKey == null || midKey.length == 0) {
-                        System.err.println("Null or empty key for element at index: " + mid);
-                        break;
-                    }
-                    
-                    int cmp = compareKeys(key, midKey);
-                    
-                    if (cmp < 0) {
-                        high = mid - 1;
-                    } else if (cmp > 0) {
-                        low = mid + 1;
-                    } else {
-                        // Key exists, should have been handled earlier
-                        insertPos = mid;
-                        break;
-                    }
-                }
-                
-                if (low > high) {
-                    insertPos = low;
-                }
+        // Log warning for null value but don't fail (we'll create an empty array later)
+        if (value == null) {
+            System.err.println("Warning: Null value in putElement, using empty array");
+        }
+        
+        // Check if there's enough space for the element header
+        int requiredHeaderSpace = ELEM_SIZE;
+        if (requiredHeaderSpace > freeSpaceForHeaders()) {
+            System.err.println("Not enough space for element header: " + requiredHeaderSpace + 
+                              " > " + freeSpaceForHeaders());
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Finds the correct position to insert the key using binary search.
+     * 
+     * @param key The key to insert
+     * @return The index where the key should be inserted
+     */
+    private int findInsertionPosition(byte[] key) {
+        int count = count();
+        int insertPos = 0;
+        
+        if (count <= 0) {
+            return 0;
+        }
+        
+        int low = 0;
+        int high = count - 1;
+        
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            Element midElem = element(mid);
+            if (midElem == null) {
+                System.err.println("Null element at index: " + mid);
+                break;
             }
+            
+            byte[] midKey = midElem.key();
+            if (midKey == null || midKey.length == 0) {
+                System.err.println("Null or empty key for element at index: " + mid);
+                break;
+            }
+            
+            int cmp = compareKeys(key, midKey);
+            
+            if (cmp < 0) {
+                high = mid - 1;
+            } else if (cmp > 0) {
+                low = mid + 1;
+            } else {
+                // Key exists, use this position
+                return mid;
+            }
+        }
+        
+        // Key doesn't exist, insert at position 'low'
+        return low;
+    }
+    
+    /**
+     * Attempts to update an existing element if the key already exists.
+     * 
+     * @return true if element was updated, false otherwise
+     */
+    private boolean updateExistingElement(byte[] key, byte[] value, boolean hasOverflow, int insertPos) {
+        int count = count();
+        if (insertPos >= count) {
+            return false;
+        }
+        
+        Element existing = element(insertPos);
+        if (existing == null) {
+            return false;
+        }
+        
+        byte[] existingKey = existing.key();
+        if (existingKey == null || !Arrays.equals(key, existingKey)) {
+            return false;
+        }
+        
+        // Key exists, update value
+        existing.setValue(value);
+        existing.setFlags(hasOverflow ? 1 : 0); // Set or clear overflow flag
+        return true;
+    }
+    
+    /**
+     * Helper class to hold calculated positions for data storage.
+     */
+    private static class DataPositions {
+        final int keyPosition;
+        final int valuePosition;
+        
+        DataPositions(int keyPosition, int valuePosition) {
+            this.keyPosition = keyPosition;
+            this.valuePosition = valuePosition;
+        }
+    }
+    
+    /**
+     * Calculates the positions where key and value data should be stored.
+     * 
+     * @return DataPositions object with calculated positions, or null if there's not enough space
+     */
+    private DataPositions calculateDataPositions(byte[] key, byte[] value, int insertPos) {
+        try {
+            int count = count();
             
             // Shift elements to make room for new element
             shiftElementsRight(insertPos);
             
-            // Calculate position for key data (from end of page)
-            int dataPos = pageSize - key.length;
+            // Initial position for key data (from end of page)
+            int keyPos = pageSize - key.length;
+            int valuePos;
             
-            // Check if there's enough space for the key
-            if (dataPos < PAGE_HEADER_SIZE + (count() + 1) * ELEM_SIZE) {
-                System.err.println("Not enough space for key: " + dataPos + " < " + 
-                                  (PAGE_HEADER_SIZE + (count() + 1) * ELEM_SIZE));
-                // Undo the shift and return false
-                shiftElementsLeft(insertPos);
-                return false;
-            }
-            
-            // If there are existing elements, position after the last one
+            // If there are existing elements, adjust positions
             if (count > 0) {
-                // Find the current lowest position (highest memory address)
-                int lowestPos = pageSize;
-                for (int i = 0; i < count; i++) {
-                    Element elem = element(i);
-                    if (elem == null) {
-                        continue; // Skip null elements
-                    }
-                    int pos = elem.pos();
-                    if (pos < lowestPos) {
-                        lowestPos = pos;
-                    }
-                }
-                dataPos = lowestPos - key.length;
-            }
-            
-            // Calculate value position
-            int valuePos = dataPos - value.length;
-            
-            // Check if there's enough space for value
-            if (valuePos < PAGE_HEADER_SIZE + (count() + 1) * ELEM_SIZE) {
-                System.err.println("Not enough space for value: " + valuePos + " < " + 
-                                  (PAGE_HEADER_SIZE + (count() + 1) * ELEM_SIZE));
-                // Undo the shift and return false
-                shiftElementsLeft(insertPos);
-                return false;
-            }
-        } catch (Exception e) {
-            System.err.println("Exception in putElement (2nd part): " + e.getMessage());
-            e.printStackTrace();
-            return false;
-        }
-        
-        // Proceed with the insertion
-        try {
-            // Recalculate counts and positions one more time for safety
-            int count = count();
-            int insertPos = 0;
-            
-            // Determine insertion position based on binary search
-            if (count > 0) {
-                int low = 0;
-                int high = count - 1;
-                
-                while (low <= high) {
-                    int mid = (low + high) >>> 1;
-                    Element midElem = element(mid);
-                    if (midElem == null) break;
-                    
-                    byte[] midKey = midElem.key();
-                    if (midKey == null || midKey.length == 0) break;
-                    
-                    int cmp = compareKeys(key, midKey);
-                    
-                    if (cmp < 0) high = mid - 1;
-                    else if (cmp > 0) low = mid + 1;
-                    else {
-                        insertPos = mid;
-                        break;
-                    }
-                }
-                
-                if (low > high) insertPos = low;
-            }
-            
-            // Shift elements to make room for the new element
-            shiftElementsRight(insertPos);
-            
-            // Calculate positions for key and value data
-            int dataPos = pageSize - key.length;
-            
-            // If there are existing elements, adjust dataPos
-            if (count > 0) {
-                // Need to find both the lowest key position and the lowest value position
+                // Find the current lowest positions
                 int lowestKeyPos = pageSize;
                 int lowestValuePos = pageSize;
+                
                 for (int i = 0; i < count; i++) {
                     Element elem = element(i);
                     if (elem == null) continue;
                     
-                    int keyPos = elem.pos();
-                    int valuePos = keyPos - elem.valueSize(); // Values are stored before keys
+                    int elemKeyPos = elem.pos();
+                    int elemValuePos = elemKeyPos - elem.valueSize();
                     
-                    if (keyPos < lowestKeyPos) lowestKeyPos = keyPos;
-                    if (valuePos < lowestValuePos) lowestValuePos = valuePos;
+                    lowestKeyPos = Math.min(lowestKeyPos, elemKeyPos);
+                    lowestValuePos = Math.min(lowestValuePos, elemValuePos);
                 }
                 
-                // Key data should be placed before the lowest key position
-                dataPos = lowestKeyPos - key.length;
+                // Place key before existing keys
+                keyPos = lowestKeyPos - key.length;
                 
-                // Make sure there's space for both key and value
-                if (dataPos - value.length < lowestValuePos) {
-                    // We need to place key+value before all existing data
-                    dataPos = lowestValuePos - key.length - value.length;
+                // Place value before key, ensuring we have enough space
+                valuePos = keyPos - value.length;
+                
+                // Check if we need to place before all existing data
+                if (valuePos < lowestValuePos) {
+                    keyPos = lowestValuePos - key.length - value.length;
+                    valuePos = keyPos - value.length;
                 }
+            } else {
+                // No existing elements, just place value before key
+                valuePos = keyPos - value.length;
             }
             
-            // Value is positioned before key
-            int valuePos = dataPos - value.length;
+            // Final safety check - ensure there's enough space
+            int headerEndPos = PAGE_HEADER_SIZE + (count + 1) * ELEM_SIZE;
             
-            // Safety check one more time
-            if (valuePos < PAGE_HEADER_SIZE + (count() + 1) * ELEM_SIZE) {
+            if (valuePos < headerEndPos) {
+                System.err.println("Not enough space for value: " + valuePos + " < " + headerEndPos);
+                // Undo the shift and return null
                 shiftElementsLeft(insertPos);
-                return false;
+                return null;
             }
             
+            return new DataPositions(keyPos, valuePos);
+        } catch (Exception e) {
+            System.err.println("Exception calculating data positions: " + e.getMessage());
+            e.printStackTrace();
+            // Undo the shift
+            try {
+                shiftElementsLeft(insertPos);
+            } catch (Exception ex) {
+                // Ignore, we're already handling an exception
+            }
+            return null;
+        }
+    }
+    
+    /**
+     * Inserts a new element into the page at the specified position.
+     */
+    private boolean insertNewElement(byte[] key, byte[] value, boolean hasOverflow, 
+                                  int insertPos, DataPositions positions) {
+        try {
             // Create new element
             int elemOffset = PAGE_HEADER_SIZE + (insertPos * ELEM_SIZE);
             Element elem = new Element(this, elemOffset);
-            elem.setPos(dataPos);
+            elem.setPos(positions.keyPosition);
             elem.setKeySize(key.length);
             elem.setValueSize(value.length);
-            
-            // Set overflow flag
-            if (hasOverflow) {
-                elem.setFlags(1); // Has overflow
-            } else {
-                elem.setFlags(0); // No overflow
-            }
+            elem.setFlags(hasOverflow ? 1 : 0);
             
             // Copy key data
-            buffer.position(dataPos);
+            buffer.position(positions.keyPosition);
             buffer.put(key);
             
             // Copy value data
-            buffer.position(valuePos);
+            buffer.position(positions.valuePosition);
             buffer.put(value);
             
             // Update count
-            setCount(count + 1);
+            setCount(count() + 1);
             
             return true;
         } catch (Exception e) {
