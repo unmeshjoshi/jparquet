@@ -57,7 +57,7 @@ public class CustomerDataExample {
         
         // Initialize storage engines
         this.rowStore = new BPlusTree(dataDir.resolve("customer_rowstore.db"));
-        this.columnStore = new ColumnStore(dataDir, "customer_columnstore.parquet", customerSchema);
+        this.columnStore = new ColumnStore(dataDir, "customer_columnstore", customerSchema);
     }
     
     /**
