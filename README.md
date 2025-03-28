@@ -112,7 +112,7 @@ JParque implements the Parquet format with the following features:
 - ACID transaction support (in progress)
 - Efficient metadata handling
 
-For more details on implementation and usage, see the [documentation](docs/README.md).
+For more details on implementation and usage, see the [documentation](docs/parquet_internals.md).
 
 ## Columnar Storage Examples
 
