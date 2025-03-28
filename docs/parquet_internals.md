@@ -8,12 +8,12 @@
 │ 4-byte magic number    │
 ├────────────────────────┤
 │ <Column chunk 1>       │
-│   - Data pages        │
-│   - Dictionary pages  │
+│   - Data pages         │
+│   - Dictionary pages   │
 ├────────────────────────┤
 │ <Column chunk 2>       │
-│   - Data pages        │
-│   - Dictionary pages  │
+│   - Data pages         │
+│   - Dictionary pages   │
 ├────────────────────────┤
 │ ...                    │
 ├────────────────────────┤
