@@ -2,6 +2,8 @@
 
 JParque is a custom implementation of the Apache Parquet columnar storage format in Java, designed for efficient data storage and retrieval. 🚀
 
+[Setup](setup.md)
+
 ## Storage Engine Comparison
 
 | Feature | B+ Tree (OLTP) | LSM Tree (OLTP) | Parquet (OLAP) |
@@ -77,14 +79,14 @@ GROUP BY store_id;
 Consider a user events table with 10 billion records:
 ```sql
 -- Find average session duration by country and device type
-SELECT 
-    country,
-    device_type,
-    AVG(session_duration) as avg_duration
+SELECT
+   country,
+   device_type,
+   AVG(session_duration) as avg_duration
 FROM user_events
-WHERE 
-    timestamp >= '2024-01-01'
-    AND timestamp < '2024-02-01'
+WHERE
+   timestamp >= '2024-01-01'
+  AND timestamp < '2024-02-01'
 GROUP BY country, device_type;
 ```
 
@@ -99,15 +101,15 @@ GROUP BY country, device_type;
 Consider an IoT sensor readings table:
 ```sql
 CREATE TABLE sensor_readings (
-    sensor_id BIGINT,
-    timestamp TIMESTAMP,
-    temperature FLOAT,
-    humidity FLOAT,
-    pressure FLOAT,
-    battery_level FLOAT,
-    status VARCHAR(10),
-    location_id BIGINT,
-    firmware_version VARCHAR(20)
+                                sensor_id BIGINT,
+                                timestamp TIMESTAMP,
+                                temperature FLOAT,
+                                humidity FLOAT,
+                                pressure FLOAT,
+                                battery_level FLOAT,
+                                status VARCHAR(10),
+                                location_id BIGINT,
+                                firmware_version VARCHAR(20)
 );
 ```
 
@@ -121,12 +123,12 @@ CREATE TABLE sensor_readings (
 2. **Query Optimization**:
 ```sql
 -- Find average temperature by location when humidity > 80%
-SELECT 
-    location_id,
-    AVG(temperature)
+SELECT
+   location_id,
+   AVG(temperature)
 FROM sensor_readings
-WHERE 
-    humidity > 80
+WHERE
+   humidity > 80
 GROUP BY location_id;
 ```
 
